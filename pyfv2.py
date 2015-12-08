@@ -1,11 +1,18 @@
 from Crypto.Cipher import AES
+from Crypto.Hash import SHA256
+from Crypto.Protocol.KDF import *
 import xml.dom.minidom as xml
+import key_wrap
+from base64 import *
+import struct
 
 class pyfv2:
 	def __init__(self, encryptedRootPList):
 		# read in encryptedRootPList
 		self.encryptedRootPList = open(encryptedRootPList, 'rb').read()
 		self.vaildRootPList = False
+		self.decryptedRootPList = False
+		self.parsedRootPList = False
 
 	def decrypt_encryptedRootPList(self, key):
 		# Will decrypt EncryptedRoot.plist.wipekey file when provided
@@ -33,14 +40,32 @@ class pyfv2:
 		# test to see if the decrypted plist appears to be correct, While
 		# not 100% accurate this test is a good approximation
 		if self.decryptedRootPList[:5] == '<?xml':
-			self.vaildRootPList = True
-
 			# trim excess blocks from decryptedRootPList added by AES
+			# by searching for the end of the plist.
 			endOfPlist = self.decryptedRootPList.find('</plist>') + 8
 			self.decryptedRootPList = self.decryptedRootPList[:endOfPlist]
 
 			#parse XML plist
 			self.parsedRootPList = xml.parseString(self.decryptedRootPList)
+			self.vaildRootPList = True
+
+	def decypt_passphrase_wrapped_KEK(self, passphrase_wrapped_KEK, passphrase):
+		# Will attempt to decrypt kek with supplied passphrase
+
+		# decode base64 encoded passphrase_wrapped_KEK
+		passphrase_wrapped_KEK = b64decode(passphrase_wrapped_KEK)
+
+		# extract salt from decoded passphrase_wrapped_KEK
+		salt = passphrase_wrapped_KEK[8:24]
+
+		# determine password hash with PBKDF2
+		password_hash = PBKDF2(passphrase, salt, count=41000, prf=lambda p, s: HMAC.new(p, s, SHA256).digest())
+
+		# extract encrypted_volume_kek
+		encrypted_volume_kek = passphrase_wrapped_KEK[32:56]
+
+		# unwrap volume kek kek
+		key_wrap.aes_unwrap_key(password_hash, encrypted_volume_kek)
 
 	# Internal function to decrypt a sector
 	# from pytruecrypt thanks to Gareth Owen (github.com/owenson)
@@ -77,6 +102,7 @@ class pyfv2:
 	    return ''.join(lines)
 
 	# Little endian (int array) to integer
+	# from pytruecrypt thanks to Gareth Owen (github.com/owenson)
 	def LEtoint(self, x):
 		y = 0
 		for i in range(16):
